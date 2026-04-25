@@ -122,22 +122,59 @@ def run_correct(show_plot=True):
 # STAGE 2
 # ════════════════════════════════════════════════════════════
 
-def run_stage2():
-    print("\n=== STAGE 2 ===")
+def run_build_lut():
+    print("\n=== BUILD LUT ===")
 
-    sino_stage1, _ = pj_io.read_pj(FILES["sino_corrected"], NVIEW, NDET)
-    sino_ideal, _ = pj_io.read_pj(FILES["sino_ideal"], NVIEW, NDET)
     sino_bh, _ = pj_io.read_pj(FILES["sino_bh"], NVIEW, NDET)
+    sino_ideal, _ = pj_io.read_pj(FILES["sino_ideal"], NVIEW, NDET)
 
     spectrum = XRaySpectrum(kVp=80)
 
     physics_lut = PhysicsLUT(spectrum)
     empirical_lut = EmpiricalLUT(sino_bh, sino_ideal)
-
     blended_lut = BlendedLUT(empirical_lut, physics_lut, alpha=0.9)
+
+    np.savez(FILES["lut_npz"],
+             physics_lut=physics_lut.table,
+             empirical_lut=empirical_lut.table,
+             blended_lut=blended_lut.table)
+
+    print("✔ LUTs built and saved")
+
+
+def run_apply_lut():
+    print("\n=== APPLY LUT ===")
+
+    sino_bh, _ = pj_io.read_pj(FILES["sino_bh"], NVIEW, NDET)
+    sino_ideal, _ = pj_io.read_pj(FILES["sino_ideal"], NVIEW, NDET)
+
+    lut_data = np.load(FILES["lut_npz"], allow_pickle=True)
+
+    empirical_lut = EmpiricalLUT.from_table(lut_data["empirical_lut"])
+    blended_lut = BlendedLUT.from_table(lut_data["blended_lut"])
 
     sino_emp = empirical_lut.apply(sino_bh)
     sino_comb = blended_lut.apply(sino_bh)
+
+    pj_io.write_pj(FILES["sino_stage2"], sino_emp)
+
+    np.savez(FILES["metrics_npz"],
+             sino_emp=sino_emp,
+             sino_comb=sino_comb)
+
+    print("✔ LUT correction applied")
+
+
+def run_reconstruct():
+    print("\n=== RECONSTRUCT ===")
+
+    sino_ideal, _ = pj_io.read_pj(FILES["sino_ideal"], NVIEW, NDET)
+    sino_bh, _ = pj_io.read_pj(FILES["sino_bh"], NVIEW, NDET)
+    sino_stage1, _ = pj_io.read_pj(FILES["sino_corrected"], NVIEW, NDET)
+
+    metrics = np.load(FILES["metrics_npz"])
+    sino_emp = metrics["sino_emp"]
+    sino_comb = metrics["sino_comb"]
 
     recon = FBPReconstructor()
     rec = recon.reconstruct_many(
@@ -149,7 +186,6 @@ def run_stage2():
     )
 
     evaluator = Evaluator(sino_ideal, rec["ideal"])
-
     evaluator.report(
         evaluator.evaluate_sinograms(
             bh=sino_bh, stage1=sino_stage1, empirical=sino_emp, combined=sino_comb
@@ -159,10 +195,43 @@ def run_stage2():
         ),
     )
 
-    pj_io.write_pj(FILES["sino_stage2"], sino_stage1)
+    print("✔ Reconstruction and evaluation done")
 
-    print("✔ Stage 2 complete")
 
+def run_stage2_plot(show_plot=True):
+    print("\n=== STAGE 2 PLOT ===")
+
+    if not show_plot:
+        return
+
+    sino_ideal, _ = pj_io.read_pj(FILES["sino_ideal"], NVIEW, NDET)
+    sino_bh, _ = pj_io.read_pj(FILES["sino_bh"], NVIEW, NDET)
+    sino_stage2, _ = pj_io.read_pj(FILES["sino_stage2"], NVIEW, NDET)
+
+    lut_data = np.load(FILES["lut_npz"], allow_pickle=True)
+
+    plotter = Stage2Plotter(FILES["fig_stage2"])
+    plotter.plot(
+        sinos={
+            "ideal": sino_ideal,
+            "bh": sino_bh,
+            "stage2": sino_stage2,
+        },
+        lut={
+            "empirical": lut_data["empirical_lut"],
+            "blended": lut_data["blended_lut"],
+        },
+        n_views=NVIEW,
+    )
+
+    print("✔ Stage 2 plot saved")
+
+
+def run_stage2():
+    run_build_lut()
+    run_apply_lut()
+    run_reconstruct()
+    run_stage2_plot()
 
 # ════════════════════════════════════════════════════════════
 # UTILS
@@ -197,6 +266,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("stage", choices=[
         "generate", "calibrate", "correct",
+        "build_lut", "apply_lut", "reconstruct", "stage2_plot",
         "stage2", "show", "all"
     ])
     parser.add_argument("files", nargs="*")
@@ -209,6 +279,14 @@ def main():
         run_calibrate()
     elif args.stage == "correct":
         run_correct()
+    elif args.stage == "build_lut":
+        run_build_lut()
+    elif args.stage == "apply_lut":
+        run_apply_lut()
+    elif args.stage == "reconstruct":
+        run_reconstruct()
+    elif args.stage == "stage2_plot":
+        run_stage2_plot()
     elif args.stage == "stage2":
         run_stage2()
     elif args.stage == "show":
