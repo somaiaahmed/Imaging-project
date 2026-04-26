@@ -342,6 +342,29 @@ class SinogramCanvas(FigureCanvas):
         self.ax.set_ylabel("View", color=DARK["text3"], fontsize=7)
         self.draw()
 
+    def show_sino_clim(self, sino: np.ndarray, title="", vmin=None, vmax=None):
+        """Show image with shared/explicit colour limits (gray cmap)."""
+        self.ax.clear()
+        self._style_ax(title)
+        if vmin is None: vmin = float(np.percentile(sino, 1))
+        if vmax is None: vmax = float(np.percentile(sino, 99))
+        self.ax.imshow(sino, cmap="gray", aspect="auto",
+                       vmin=vmin, vmax=vmax, origin="upper")
+        self.ax.set_xlabel("px", color=DARK["text3"], fontsize=7)
+        self.ax.set_ylabel("px", color=DARK["text3"], fontsize=7)
+        self.draw()
+
+    def show_diff(self, diff: np.ndarray, title="", amax=None):
+        """Show a signed difference map (RdBu_r colormap)."""
+        self.ax.clear()
+        self._style_ax(title)
+        if amax is None: amax = float(np.percentile(np.abs(diff), 99))
+        self.ax.imshow(diff, cmap="RdBu_r", aspect="auto",
+                       vmin=-amax, vmax=amax, origin="upper")
+        self.ax.set_xlabel("px", color=DARK["text3"], fontsize=7)
+        self.ax.set_ylabel("px", color=DARK["text3"], fontsize=7)
+        self.draw()
+
     def show_placeholder(self, title=""):
         self.ax.clear()
         self._style_ax(title)
@@ -876,33 +899,119 @@ class MainWindow(QMainWindow):
 
     def _build_recon_tab(self) -> QWidget:
         w = QWidget()
-        lay = QHBoxLayout(w)
-        lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(0)
+        root = QVBoxLayout(w)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
 
-        titles = [("Ideal", DARK["green"]),
-                  ("BH (uncorrected)", DARK["red"]),
-                  ("Stage 1 corrected", DARK["accent"]),
-                  ("Stage 2 (LUT)", DARK["amber"])]
+        # ── top row: 4 reconstruction images ─────────────────────────────
+        top = QWidget()
+        top_lay = QHBoxLayout(top)
+        top_lay.setContentsMargins(0, 0, 0, 0)
+        top_lay.setSpacing(0)
+
+        img_titles = [("Ideal",            DARK["green"]),
+                      ("BH (uncorrected)", DARK["red"]),
+                      ("Stage 1 corrected",DARK["accent"]),
+                      ("Stage 2 (LUT)",    DARK["amber"])]
         self.recon_canvases: list[SinogramCanvas] = []
 
-        for i, (t, c) in enumerate(titles):
+        for i, (t, c) in enumerate(img_titles):
             cell = QWidget()
-            if i < len(titles) - 1:
+            if i < len(img_titles) - 1:
                 cell.setStyleSheet(f"border-right: 1px solid {DARK['border']};")
             cl = QVBoxLayout(cell)
             cl.setContentsMargins(0, 0, 0, 0)
             cl.setSpacing(0)
             hdr = QLabel(f"  {t.upper()}")
-            hdr.setFixedHeight(28)
-            hdr.setStyleSheet(f"background: {DARK['bg2']}; color: {c}; font-size: 9px; font-weight: bold; letter-spacing: 2px; border-bottom: 1px solid {DARK['border']};")
+            hdr.setFixedHeight(24)
+            hdr.setStyleSheet(
+                f"background: {DARK['bg2']}; color: {c}; font-size: 9px; "
+                f"font-weight: bold; letter-spacing: 2px; "
+                f"border-bottom: 1px solid {DARK['border']};"
+            )
             canvas = SinogramCanvas(parent=cell)
             canvas.show_placeholder(t)
             self.recon_canvases.append(canvas)
             cl.addWidget(hdr)
             cl.addWidget(canvas, 1)
-            lay.addWidget(cell, 1)
+            top_lay.addWidget(cell, 1)
 
+        root.addWidget(top, 3)
+
+        # ── divider + label ───────────────────────────────────────────────
+        div = QWidget()
+        div.setFixedHeight(22)
+        div.setStyleSheet(
+            f"background: {DARK['bg3']}; border-top: 1px solid {DARK['border']};"
+            f"border-bottom: 1px solid {DARK['border']};"
+        )
+        div_lay = QHBoxLayout(div)
+        div_lay.setContentsMargins(10, 0, 0, 0)
+        lbl = QLabel("ERROR MAPS  (blue = under-estimation · red = over-estimation)")
+        lbl.setStyleSheet(
+            f"color: {DARK['text3']}; font-size: 9px; font-weight: bold; "
+            f"letter-spacing: 2px;"
+        )
+        div_lay.addWidget(lbl)
+        root.addWidget(div)
+
+        # ── bottom row: 3 difference maps ────────────────────────────────
+        bot = QWidget()
+        bot_lay = QHBoxLayout(bot)
+        bot_lay.setContentsMargins(0, 0, 0, 0)
+        bot_lay.setSpacing(0)
+
+        diff_titles = [("BH error",        DARK["red"]),
+                       ("Stage 1 residual", DARK["accent"]),
+                       ("Stage 2 residual", DARK["amber"])]
+        self.diff_canvases: list[SinogramCanvas] = []
+
+        for i, (t, c) in enumerate(diff_titles):
+            cell = QWidget()
+            if i < len(diff_titles) - 1:
+                cell.setStyleSheet(f"border-right: 1px solid {DARK['border']};")
+            cl = QVBoxLayout(cell)
+            cl.setContentsMargins(0, 0, 0, 0)
+            cl.setSpacing(0)
+            hdr = QLabel(f"  {t.upper()}")
+            hdr.setFixedHeight(24)
+            hdr.setStyleSheet(
+                f"background: {DARK['bg2']}; color: {c}; font-size: 9px; "
+                f"font-weight: bold; letter-spacing: 2px; "
+                f"border-bottom: 1px solid {DARK['border']};"
+            )
+            canvas = SinogramCanvas(parent=cell)
+            canvas.show_placeholder(t)
+            self.diff_canvases.append(canvas)
+            cl.addWidget(hdr)
+            cl.addWidget(canvas, 1)
+            bot_lay.addWidget(cell, 1)
+
+        # 4th cell: RMSE summary text
+        rmse_cell = QWidget()
+        rmse_cell.setStyleSheet(
+            f"background: {DARK['bg3']}; border-left: 1px solid {DARK['border']};"
+        )
+        rc_lay = QVBoxLayout(rmse_cell)
+        rc_lay.setContentsMargins(12, 12, 12, 12)
+        rc_lay.setSpacing(6)
+        lbl2 = QLabel("RMSE SUMMARY")
+        lbl2.setStyleSheet(
+            f"color: {DARK['text3']}; font-size: 9px; font-weight: bold; letter-spacing: 2px;"
+        )
+        rc_lay.addWidget(lbl2)
+        self.rmse_bh_lbl    = QLabel("BH:      —")
+        self.rmse_s1_lbl    = QLabel("Stage 1: —")
+        self.rmse_s2_lbl    = QLabel("Stage 2: —")
+        for lbl in [self.rmse_bh_lbl, self.rmse_s1_lbl, self.rmse_s2_lbl]:
+            lbl.setStyleSheet(
+                f"color: {DARK['text']}; font-size: 11px; font-family: monospace;"
+            )
+            rc_lay.addWidget(lbl)
+        rc_lay.addStretch()
+        bot_lay.addWidget(rmse_cell, 1)
+
+        root.addWidget(bot, 2)
         return w
 
     # ── CONSOLE ──────────────────────────────────────────────
@@ -983,6 +1092,21 @@ class MainWindow(QMainWindow):
         for s in steps:
             if s in self._step_rows:
                 self._step_rows[s].set_status("active")
+            # Update s2 chip to "running" as soon as any s2 step starts
+            if s in self._S2_STEPS:
+                self.s2_chip.setText("Stage 2 running")
+                self.s2_chip.setStyleSheet(f"""
+                    background: {DARK['accent_dim']}; color: #a0b4ff;
+                    font-size: 10px; font-weight: bold;
+                    padding: 3px 10px; border-radius: 10px; letter-spacing: 1px;
+                """)
+            if s in self._S1_STEPS:
+                self.s1_chip.setText("Stage 1 running")
+                self.s1_chip.setStyleSheet(f"""
+                    background: {DARK['accent_dim']}; color: #a0b4ff;
+                    font-size: 10px; font-weight: bold;
+                    padding: 3px 10px; border-radius: 10px; letter-spacing: 1px;
+                """)
 
         self._set_buttons_enabled(False)
         self._log(f"=== running: {', '.join(steps)} ===", "info")
@@ -1002,10 +1126,16 @@ class MainWindow(QMainWindow):
         self._run_steps(["generate", "calibrate", "correct",
                          "build_lut", "apply_lut", "reconstruct", "stage2_plot"])
 
+    # ── step completion tracking ──────────────────────────────
+    _S1_STEPS = {"generate", "calibrate", "correct"}
+    _S2_STEPS = {"build_lut", "apply_lut", "reconstruct", "stage2_plot"}
+
     def _on_step_done(self, step: str):
         if step in self._step_rows:
             self._step_rows[step].set_status("done", "done")
         self._refresh_sinograms(step)
+        self._refresh_recons(step)
+        self._update_chips(step)
 
     def _on_step_error(self, step: str, err: str):
         if step in self._step_rows:
@@ -1022,8 +1152,8 @@ class MainWindow(QMainWindow):
         try:
             if step == "correct":
                 cal = np.load(FILES["calibration"])
-                sino_ideal, _ = pj_io.read_pj(FILES["sino_ideal"], NVIEW, NDET)
-                sino_bh,    _ = pj_io.read_pj(FILES["sino_bh"],    NVIEW, NDET)
+                sino_ideal, _ = pj_io.read_pj(FILES["sino_ideal"],     NVIEW, NDET)
+                sino_bh,    _ = pj_io.read_pj(FILES["sino_bh"],        NVIEW, NDET)
                 sino_corr,  _ = pj_io.read_pj(FILES["sino_corrected"], NVIEW, NDET)
                 from plotter import Stage1Plotter
                 Stage1Plotter(FILES["fig_stage1"]).plot(
@@ -1036,47 +1166,194 @@ class MainWindow(QMainWindow):
                 self._log("   stage 1 figure saved", "info")
 
             elif step == "stage2_plot":
-                sino_ideal, _ = pj_io.read_pj(FILES["sino_ideal"],  NVIEW, NDET)
-                sino_bh,    _ = pj_io.read_pj(FILES["sino_bh"],     NVIEW, NDET)
-                sino_s2,    _ = pj_io.read_pj(FILES["sino_stage2"], NVIEW, NDET)
+                # ── load all sinograms ──────────────────────────────────────
+                sino_ideal,  _ = pj_io.read_pj(FILES["sino_ideal"],     NVIEW, NDET)
+                sino_bh,     _ = pj_io.read_pj(FILES["sino_bh"],        NVIEW, NDET)
+                sino_stage1, _ = pj_io.read_pj(FILES["sino_corrected"], NVIEW, NDET)
+                sino_s2,     _ = pj_io.read_pj(FILES["sino_stage2"],    NVIEW, NDET)
+
+                # ── reconstruct LUT objects from saved tables ───────────────
                 lut_data = np.load(FILES["lut_npz"], allow_pickle=True)
+                from lut import PhysicsLUT, EmpiricalLUT
+                physics_lut   = PhysicsLUT.from_table(lut_data["physics_lut"])
+                empirical_lut = EmpiricalLUT.from_table(lut_data["empirical_lut"])
+
+                # ── load the combined sinogram from metrics file ────────────
+                metrics   = np.load(FILES["metrics_npz"])
+                sino_comb = metrics["sino_comb"]
+
+                # ── reconstruct images (needed for image panels + RMSE bars) ─
+                from reconstruction import FBPReconstructor
+                rec = FBPReconstructor().reconstruct_many(
+                    ideal     = sino_ideal,
+                    bh        = sino_bh,
+                    stage1    = sino_stage1,
+                    empirical = sino_s2,
+                    combined  = sino_comb,
+                )
+
+                # ── build dicts matching Stage2Plotter.plot() signature ─────
+                def _rmse(a, b):
+                    return float(np.sqrt(np.mean((a - b) ** 2)))
+
+                sinograms = {
+                    "bh":      (sino_bh,     "BH (corrupted)",    0.0),
+                    "stage1":  (sino_stage1, "Stage 1 corrected", 0.0),
+                    "empirical":(sino_s2,    "Stage 2 LUT",       0.0),
+                    "ideal":   (sino_ideal,  "Ideal",             0.0),
+                }
+                images = {
+                    "bh":      (rec["bh"],        "BH",      _rmse(rec["bh"],        rec["ideal"])),
+                    "stage1":  (rec["stage1"],    "Stage 1", _rmse(rec["stage1"],    rec["ideal"])),
+                    "empirical":(rec["empirical"],"Stage 2", _rmse(rec["empirical"], rec["ideal"])),
+                    "ideal":   (rec["ideal"],     "Ideal",   0.0),
+                }
+
+                from spectrum import XRaySpectrum
                 from plotter import Stage2Plotter
-                Stage2Plotter(FILES["fig_stage2"]).plot(
-                    sinos={"ideal": sino_ideal, "bh": sino_bh, "stage2": sino_s2},
-                    lut={"empirical": lut_data["empirical_lut"],
-                         "blended":   lut_data["blended_lut"]},
-                    n_views=NVIEW,
+                Stage2Plotter(
+                    spectrum      = XRaySpectrum(kVp=80),
+                    physics_lut   = physics_lut,
+                    empirical_lut = empirical_lut,
+                    output_path   = FILES["fig_stage2"],
+                ).plot(
+                    sinograms         = sinograms,
+                    images            = images,
+                    sino_bh           = sino_bh,
+                    sino_stage1       = sino_stage1,
+                    sino_lut_combined = sino_comb,
+                    sino_ideal        = sino_ideal,
+                    recon_ideal       = rec["ideal"],
                 )
                 self._log("   stage 2 figure saved", "info")
 
         except Exception as e:
             self._log(f"   plot failed: {e}", "warn")
 
+    def _update_chips(self, step: str):
+        """Update the Stage 1 / Stage 2 status chips in the topbar."""
+        if step in self._S1_STEPS:
+            done = all(self._step_rows.get(s) and
+                       self._step_rows[s]._status == "done"
+                       for s in self._S1_STEPS)
+            if done:
+                self.s1_chip.setText("Stage 1 complete")
+                self.s1_chip.setStyleSheet(f"""
+                    background: {DARK['green_dim']}; color: {DARK['green']};
+                    font-size: 10px; font-weight: bold;
+                    padding: 3px 10px; border-radius: 10px; letter-spacing: 1px;
+                """)
+
+        if step in self._S2_STEPS:
+            done = all(self._step_rows.get(s) and
+                       self._step_rows[s]._status == "done"
+                       for s in self._S2_STEPS)
+            if done:
+                self.s2_chip.setText("Stage 2 complete")
+                self.s2_chip.setStyleSheet(f"""
+                    background: {DARK['green_dim']}; color: {DARK['green']};
+                    font-size: 10px; font-weight: bold;
+                    padding: 3px 10px; border-radius: 10px; letter-spacing: 1px;
+                """)
+            else:
+                # at least one step ran — show "running"
+                self.s2_chip.setText("Stage 2 running")
+                self.s2_chip.setStyleSheet(f"""
+                    background: {DARK['accent_dim']}; color: #a0b4ff;
+                    font-size: 10px; font-weight: bold;
+                    padding: 3px 10px; border-radius: 10px; letter-spacing: 1px;
+                """)
+
+    def _refresh_recons(self, step: str):
+        """Populate the Reconstructions tab after reconstruct completes."""
+        if step != "reconstruct" or not PIPELINE_AVAILABLE:
+            return
+        try:
+            sino_ideal,  _ = pj_io.read_pj(FILES["sino_ideal"],     NVIEW, NDET)
+            sino_bh,     _ = pj_io.read_pj(FILES["sino_bh"],        NVIEW, NDET)
+            sino_stage1, _ = pj_io.read_pj(FILES["sino_corrected"], NVIEW, NDET)
+
+            metrics  = np.load(FILES["metrics_npz"])
+            sino_emp = metrics["sino_emp"]
+            sino_comb= metrics["sino_comb"]
+
+            from reconstruction import FBPReconstructor
+            rec = FBPReconstructor().reconstruct_many(
+                ideal    = sino_ideal,
+                bh       = sino_bh,
+                stage1   = sino_stage1,
+                empirical= sino_emp,
+                combined = sino_comb,
+            )
+
+            # ── shared colour scale based on ideal image ────────────
+            vmin = float(np.percentile(rec["ideal"], 1))
+            vmax = float(np.percentile(rec["ideal"], 99))
+
+            titles = ["Ideal", "BH (uncorrected)", "Stage 1 corrected", "Stage 2 (LUT)"]
+            keys   = ["ideal", "bh", "stage1", "empirical"]
+            for canvas, key, title in zip(self.recon_canvases, keys, titles):
+                canvas.show_sino_clim(rec[key], title, vmin, vmax)
+
+            # ── difference maps (same absolute scale for fair comparison) ─
+            diffs = [
+                (rec["bh"]        - rec["ideal"], "BH error"),
+                (rec["stage1"]    - rec["ideal"], "Stage 1 residual"),
+                (rec["empirical"] - rec["ideal"], "Stage 2 residual"),
+            ]
+            amax = max(float(np.percentile(np.abs(d), 99)) for d, _ in diffs)
+            for canvas, (diff, title) in zip(self.diff_canvases, diffs):
+                canvas.show_diff(diff, title, amax)
+
+            # ── RMSE text labels ──────────────────────────────────────────
+            def _rmse(a, b): return float(np.sqrt(np.mean((a - b)**2)))
+            r_bh = _rmse(rec["bh"],        rec["ideal"])
+            r_s1 = _rmse(rec["stage1"],    rec["ideal"])
+            r_s2 = _rmse(rec["empirical"], rec["ideal"])
+            self.rmse_bh_lbl.setText(f"BH:      {r_bh:.6f}")
+            self.rmse_s1_lbl.setText(f"Stage 1: {r_s1:.6f}")
+            self.rmse_s2_lbl.setText(f"Stage 2: {r_s2:.6f}")
+            colors = {
+                "bh":   DARK["red"],
+                "stage1": DARK["accent"] if r_s1 < r_bh else DARK["amber"],
+                "stage2": DARK["green"]  if r_s2 < r_s1 else DARK["amber"],
+            }
+            self.rmse_bh_lbl.setStyleSheet(f"color:{DARK['red']}; font-size:11px; font-family:monospace;")
+            best = min(r_s1, r_s2)
+            self.rmse_s1_lbl.setStyleSheet(
+                f"color:{DARK['green'] if r_s1==best else DARK['accent']}; font-size:11px; font-family:monospace;")
+            self.rmse_s2_lbl.setStyleSheet(
+                f"color:{DARK['green'] if r_s2==best else DARK['amber']}; font-size:11px; font-family:monospace;")
+
+            self._log(f"   recon RMSE  BH={r_bh:.5f}  S1={r_s1:.5f}  S2={r_s2:.5f}", "info")
+        except Exception as e:
+            self._log(f"   recon display failed: {e}", "warn")
+
     def _refresh_sinograms(self, step: str):
-        """Load and display sinograms after relevant steps complete."""
+        """Load and display sinograms in the viewer after relevant steps complete."""
         if not PIPELINE_AVAILABLE:
             return
         try:
-            label_map = {
-                "generate":    ("sino_ideal", 0),
-                "correct":     ("sino_corrected", 2),
-                "apply_lut":   ("sino_stage2", 2),
+            # Map each step to the canvas slots it should refresh.
+            # Each entry: list of (file_key, canvas_index, title)
+            refresh_map: dict[str, list[tuple[str, int, str]]] = {
+                "generate": [
+                    ("sino_ideal", 0, "Ideal"),
+                    ("sino_bh",    1, "Beam Hardened"),
+                ],
+                "correct": [
+                    ("sino_corrected", 2, "Corrected (Stage 1)"),
+                ],
+                "apply_lut": [
+                    ("sino_stage2", 2, "Corrected (Stage 2)"),
+                ],
             }
-            if step not in label_map:
-                return
-            key, idx = label_map[step]
-            path = FILES.get(key)
-            if path and os.path.exists(path):
-                sino, _ = pj_io.read_pj(path, NVIEW, NDET)
-                titles = ["Ideal", "Beam Hardened", "Corrected"]
-                self.sino_canvases[idx].show_sino(sino, titles[idx])
-
-            # Always try to show BH after generate
-            if step == "generate":
-                bh_path = FILES.get("sino_bh")
-                if bh_path and os.path.exists(bh_path):
-                    bh, _ = pj_io.read_pj(bh_path, NVIEW, NDET)
-                    self.sino_canvases[1].show_sino(bh, "Beam Hardened")
+            targets = refresh_map.get(step, [])
+            for file_key, canvas_idx, title in targets:
+                path = FILES.get(file_key)
+                if path and os.path.exists(path):
+                    sino, _ = pj_io.read_pj(path, NVIEW, NDET)
+                    self.sino_canvases[canvas_idx].show_sino(sino, title)
         except Exception as e:
             self._log(f"   sinogram refresh failed: {e}", "warn")
 
