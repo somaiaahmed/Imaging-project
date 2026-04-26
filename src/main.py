@@ -59,15 +59,21 @@ def run_generate():
     print("\n=== GENERATE ===")
     ensure_dirs()
 
-    phantom = SheppLoganPhantom(size=NDET)
+    phantom   = SheppLoganPhantom(size=NDET)
     projector = ForwardProjector(n_views=NVIEW, n_det=NDET)
-    bh_sim = BeamHardeningSimulator(order=3)
+    bh_sim    = BeamHardeningSimulator(order=3, severity="strong")  # "severe" for even more
 
     sino_ideal = projector.project(phantom.image)
-    sino_bh = bh_sim.apply(sino_ideal)
+    sino_bh    = bh_sim.apply(sino_ideal)
 
-    pj_io.write_pj(FILES["sino_ideal"], sino_ideal)
-    pj_io.write_pj(FILES["sino_bh"], sino_bh)
+    # CRITICAL: both files must use the SAME scale factor so that when
+    # read back their values are directly comparable for calibration.
+    # We fix the scale to INT16_MAX / ideal_max so ideal maps to [0,1]
+    # and BH is proportionally smaller (reflecting the real suppression).
+    from pj_io import INT16_MAX
+    shared_scale = INT16_MAX / float(sino_ideal.max())
+    pj_io.write_pj(FILES["sino_ideal"], sino_ideal, raw_scale=shared_scale)
+    pj_io.write_pj(FILES["sino_bh"],    sino_bh,    raw_scale=shared_scale)
 
     print("✔ Generated sinograms")
 
@@ -204,24 +210,56 @@ def run_stage2_plot(show_plot=True):
     if not show_plot:
         return
 
-    sino_ideal, _ = pj_io.read_pj(FILES["sino_ideal"], NVIEW, NDET)
-    sino_bh, _ = pj_io.read_pj(FILES["sino_bh"], NVIEW, NDET)
-    sino_stage2, _ = pj_io.read_pj(FILES["sino_stage2"], NVIEW, NDET)
+    sino_ideal,  _ = pj_io.read_pj(FILES["sino_ideal"],     NVIEW, NDET)
+    sino_bh,     _ = pj_io.read_pj(FILES["sino_bh"],        NVIEW, NDET)
+    sino_stage1, _ = pj_io.read_pj(FILES["sino_corrected"], NVIEW, NDET)
+    sino_stage2, _ = pj_io.read_pj(FILES["sino_stage2"],    NVIEW, NDET)
 
-    lut_data = np.load(FILES["lut_npz"], allow_pickle=True)
+    lut_data      = np.load(FILES["lut_npz"], allow_pickle=True)
+    metrics       = np.load(FILES["metrics_npz"])
+    sino_comb     = metrics["sino_comb"]
 
-    plotter = Stage2Plotter(FILES["fig_stage2"])
+    physics_lut   = PhysicsLUT.from_table(lut_data["physics_lut"])
+    empirical_lut = EmpiricalLUT.from_table(lut_data["empirical_lut"])
+
+    recon = FBPReconstructor()
+    rec   = recon.reconstruct_many(
+        ideal    = sino_ideal,
+        bh       = sino_bh,
+        stage1   = sino_stage1,
+        empirical= sino_stage2,
+        combined = sino_comb,
+    )
+
+    def _rmse(a, b): return float(np.sqrt(np.mean((a - b) ** 2)))
+
+    sinograms = {
+        "bh":      (sino_bh,     "BH (corrupted)",    0.0),
+        "stage1":  (sino_stage1, "Stage 1 corrected", 0.0),
+        "empirical":(sino_stage2,"Stage 2 LUT",       0.0),
+        "ideal":   (sino_ideal,  "Ideal",             0.0),
+    }
+    images = {
+        "bh":      (rec["bh"],        "BH",      _rmse(rec["bh"],        rec["ideal"])),
+        "stage1":  (rec["stage1"],    "Stage 1", _rmse(rec["stage1"],    rec["ideal"])),
+        "empirical":(rec["empirical"],"Stage 2", _rmse(rec["empirical"], rec["ideal"])),
+        "ideal":   (rec["ideal"],     "Ideal",   0.0),
+    }
+
+    plotter = Stage2Plotter(
+        spectrum      = XRaySpectrum(kVp=80),
+        physics_lut   = physics_lut,
+        empirical_lut = empirical_lut,
+        output_path   = FILES["fig_stage2"],
+    )
     plotter.plot(
-        sinos={
-            "ideal": sino_ideal,
-            "bh": sino_bh,
-            "stage2": sino_stage2,
-        },
-        lut={
-            "empirical": lut_data["empirical_lut"],
-            "blended": lut_data["blended_lut"],
-        },
-        n_views=NVIEW,
+        sinograms         = sinograms,
+        images            = images,
+        sino_bh           = sino_bh,
+        sino_stage1       = sino_stage1,
+        sino_lut_combined = sino_comb,
+        sino_ideal        = sino_ideal,
+        recon_ideal       = rec["ideal"],
     )
 
     print("✔ Stage 2 plot saved")
