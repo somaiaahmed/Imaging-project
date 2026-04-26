@@ -14,7 +14,6 @@ from __future__ import annotations
 import abc
 import numpy as np
 from scipy.interpolate import interp1d
-from scipy.integrate import trapezoid
 
 from spectrum import XRaySpectrum
 
@@ -32,12 +31,19 @@ class BaseLUT(abc.ABC):
     def apply(self, sino: np.ndarray) -> np.ndarray:
         """Apply the LUT to a sinogram, replacing any bad pixels safely."""
 
+    @property
+    @abc.abstractmethod
+    def table(self) -> np.ndarray:
+        """
+        Return a serialisable numpy array representing this LUT.
+        Convention: shape (2, N) — row 0 = input (BH) axis,
+                                   row 1 = output (corrected) axis.
+        """
+
     # ── shared utility ────────────────────────────────────────────────────────
 
     @staticmethod
-    def _safe_apply(
-        fn, sino: np.ndarray, fallback: np.ndarray
-    ) -> np.ndarray:
+    def _safe_apply(fn, sino: np.ndarray, fallback: np.ndarray) -> np.ndarray:
         out = fn(sino)
         bad = np.isnan(out) | np.isinf(out)
         if bad.any():
@@ -71,20 +77,22 @@ class PhysicsLUT(BaseLUT):
         t_max: float = 8.0,
         n_samples: int = 5000,
     ):
-        self.spectrum = spectrum
-        self.t_max = t_max
+        self.spectrum  = spectrum
+        self.t_max     = t_max
         self.n_samples = n_samples
 
-        self._interp = None
-        self.p_poly_norm: np.ndarray = np.array([])
+        self._interp: interp1d | None = None
+        self.p_poly_norm:  np.ndarray = np.array([])
         self.p_ideal_norm: np.ndarray = np.array([])
 
         self.build()
 
+    # ------------------------------------------------------------------
+
     def build(self) -> None:
         t_physical = np.linspace(1e-6, 1.0, self.n_samples) * self.t_max
 
-        p_poly = self.spectrum.polychromatic_projection(t_physical)
+        p_poly  = self.spectrum.polychromatic_projection(t_physical)
         p_ideal = self.spectrum.mu_mean * t_physical
 
         p_min, p_max = p_poly.min(), p_poly.max()
@@ -96,15 +104,41 @@ class PhysicsLUT(BaseLUT):
         self.p_poly_norm  = p_poly_norm[mono]
         self.p_ideal_norm = p_ideal_norm[mono]
 
+        self._build_interp()
+        print(
+            f"    PhysicsLUT built — range: "
+            f"{self.p_poly_norm.min():.4f} -> {self.p_poly_norm.max():.4f}"
+        )
+
+    def _build_interp(self) -> None:
         self._interp = interp1d(
             self.p_poly_norm, self.p_ideal_norm,
             bounds_error=False,
             fill_value=(self.p_ideal_norm[0], self.p_ideal_norm[-1]),
         )
-        print(
-            f"    PhysicsLUT built — range: "
-            f"{self.p_poly_norm.min():.4f} -> {self.p_poly_norm.max():.4f}"
+
+    # ------------------------------------------------------------------
+
+    @property
+    def table(self) -> np.ndarray:
+        """2×N array — row 0 = BH axis, row 1 = ideal axis."""
+        return np.stack([self.p_poly_norm, self.p_ideal_norm])
+
+    @classmethod
+    def from_table(cls, table: np.ndarray) -> "PhysicsLUT":
+        """Reconstruct from a saved table without re-running the physics model."""
+        obj = cls.__new__(cls)
+        obj.spectrum     = None
+        obj.t_max        = None
+        obj.n_samples    = None
+        obj.p_poly_norm  = table[0]
+        obj.p_ideal_norm = table[1]
+        obj._interp = interp1d(
+            obj.p_poly_norm, obj.p_ideal_norm,
+            bounds_error=False,
+            fill_value=(obj.p_ideal_norm[0], obj.p_ideal_norm[-1]),
         )
+        return obj
 
     def apply(self, sino: np.ndarray) -> np.ndarray:
         return self._safe_apply(self._interp, sino, sino)
@@ -128,19 +162,21 @@ class EmpiricalLUT(BaseLUT):
 
     def __init__(
         self,
-        sino_bh: np.ndarray,
+        sino_bh:    np.ndarray,
         sino_ideal: np.ndarray,
-        n_bins: int = 500,
+        n_bins:     int = 500,
     ):
-        self.sino_bh = sino_bh
+        self.sino_bh    = sino_bh
         self.sino_ideal = sino_ideal
-        self.n_bins = n_bins
+        self.n_bins     = n_bins
 
-        self._interp = None
-        self.bh_centers: np.ndarray = np.array([])
+        self._interp:   interp1d | None = None
+        self.bh_centers:  np.ndarray = np.array([])
         self.ideal_means: np.ndarray = np.array([])
 
         self.build()
+
+    # ------------------------------------------------------------------
 
     def build(self) -> None:
         bh_flat    = self.sino_bh.flatten()
@@ -160,17 +196,39 @@ class EmpiricalLUT(BaseLUT):
             self.bh_centers, self.bh_centers[valid], ideal_means[valid]
         )
 
-        self._interp = interp1d(
-            self.bh_centers, self.ideal_means,
-            bounds_error=False,
-            fill_value=(self.ideal_means[0], self.ideal_means[-1]),
-        )
+        self._build_interp()
 
         test_range = self._interp(self.sino_bh)
         print(
             f"    EmpiricalLUT built — output range: "
             f"{test_range.min():.4f} -> {test_range.max():.4f}"
         )
+
+    def _build_interp(self) -> None:
+        self._interp = interp1d(
+            self.bh_centers, self.ideal_means,
+            bounds_error=False,
+            fill_value=(self.ideal_means[0], self.ideal_means[-1]),
+        )
+
+    # ------------------------------------------------------------------
+
+    @property
+    def table(self) -> np.ndarray:
+        """2×N array — row 0 = BH centres, row 1 = ideal means."""
+        return np.stack([self.bh_centers, self.ideal_means])
+
+    @classmethod
+    def from_table(cls, table: np.ndarray) -> "EmpiricalLUT":
+        """Reconstruct from a saved table without the original sinograms."""
+        obj = cls.__new__(cls)
+        obj.sino_bh    = None
+        obj.sino_ideal = None
+        obj.n_bins     = table.shape[1]
+        obj.bh_centers  = table[0]
+        obj.ideal_means = table[1]
+        obj._build_interp()
+        return obj
 
     def apply(self, sino: np.ndarray) -> np.ndarray:
         return self._safe_apply(self._interp, sino, sino)
@@ -194,18 +252,63 @@ class BlendedLUT(BaseLUT):
 
     def __init__(
         self,
-        primary: BaseLUT,
+        primary:   BaseLUT,
         secondary: BaseLUT,
-        alpha: float = 0.9,
+        alpha:     float = 0.9,
     ):
-        self.primary = primary
+        self.primary   = primary
         self.secondary = secondary
-        self.alpha = alpha
+        self.alpha     = alpha
 
     def build(self) -> None:
         # Constituent LUTs are already built at construction time.
         pass
 
+    # ------------------------------------------------------------------
+
+    @property
+    def table(self) -> np.ndarray:
+        """
+        3×N array sampled over the primary LUT's input axis:
+          row 0 = BH input values
+          row 1 = blended output values
+          row 2 = alpha (broadcast scalar, stored for reference)
+        """
+        bh_axis  = self.primary.table[0]           # input grid from primary
+        out_vals = (
+            self.alpha       * self.primary.apply(bh_axis[np.newaxis, :]).ravel()
+            + (1 - self.alpha) * self.secondary.apply(bh_axis[np.newaxis, :]).ravel()
+        )
+        alpha_row = np.full_like(bh_axis, self.alpha)
+        return np.stack([bh_axis, out_vals, alpha_row])
+
+    @classmethod
+    def from_table(cls, table: np.ndarray) -> "BlendedLUT":
+        """
+        Reconstruct a BlendedLUT as a simple interpolating LUT.
+        The returned object's primary/secondary are set to None;
+        apply() uses a direct interp1d built from the saved table.
+        """
+        obj = cls.__new__(cls)
+        obj.primary   = None
+        obj.secondary = None
+        obj.alpha     = float(table[2, 0])
+        bh_axis  = table[0]
+        out_vals = table[1]
+        obj._direct_interp = interp1d(
+            bh_axis, out_vals,
+            bounds_error=False,
+            fill_value=(out_vals[0], out_vals[-1]),
+        )
+        return obj
+
     def apply(self, sino: np.ndarray) -> np.ndarray:
-        out = self.alpha * self.primary.apply(sino) + (1 - self.alpha) * self.secondary.apply(sino)
+        # After from_table() the constituents are gone; use the saved curve.
+        if hasattr(self, "_direct_interp"):
+            return self._safe_apply(self._direct_interp, sino, sino)
+
+        out = (
+            self.alpha       * self.primary.apply(sino)
+            + (1 - self.alpha) * self.secondary.apply(sino)
+        )
         return self._safe_apply(lambda x: x, out, sino)
