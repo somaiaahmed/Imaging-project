@@ -10,31 +10,19 @@ INT16_MAX = 32767
 
 def read_pj(filename, nview=360, ndet=512, scale=None):
     """
-    Read a raw .pj sinogram file.
+    Read a raw .pj sinogram file written by write_pj.
 
-    The file is assumed to store int16 samples, possibly preceded by a
-    header of unknown size.  We try every offset in [0, 2000) and keep
-    the one whose chunk has the highest standard deviation (most detail).
+    IMPORTANT: write_pj now always uses a shared scale (INT16_MAX /
+    ideal_max) for both ideal and BH files.  read_pj therefore defaults
+    to dividing by INT16_MAX so both files decode to the same float
+    range and calibration can compare them directly.
 
     Parameters
     ----------
     filename : str
-        Path to the .pj file.
-    nview : int
-        Number of projection angles (rows).  Default 360.
-    ndet : int
-        Number of detector bins (columns).  Default 512.
+    nview, ndet : int
     scale : float or None
-        Divide the int16 values by this number to get physical units.
-        If None the function auto-scales so the maximum absolute value
-        in the returned array is 1.0.
-
-    Returns
-    -------
-    sino : np.ndarray, shape (nview, ndet), dtype float32
-        Sinogram values in [−1, 1] (auto-scale) or physical units.
-    meta : dict
-        {'offset': int, 'std_score': float, 'raw_scale': float}
+        Override divisor. Default: INT16_MAX (matches write_pj default).
     """
     raw = np.fromfile(filename, dtype=np.int16)
     expected = nview * ndet
@@ -47,34 +35,23 @@ def read_pj(filename, nview=360, ndet=512, scale=None):
             f"File too small: need {expected} int16 values, got {raw.size}."
         )
 
-    best_score = -1.0
-    best_offset = 0
-    best_chunk = None
-
+    # Try offsets 0..min(2000) and pick the one with highest std
+    best_score, best_offset, best_chunk = -1.0, 0, None
     for offset in range(0, min(2000, raw.size - expected + 1)):
         chunk = raw[offset: offset + expected]
         score = float(np.std(chunk))
         if score > best_score:
-            best_score = score
-            best_offset = offset
-            best_chunk = chunk
+            best_score, best_offset, best_chunk = score, offset, chunk
 
     data = best_chunk.reshape((nview, ndet)).astype(np.float32)
 
-    # Determine scale factor
-    abs_max = np.max(np.abs(data))
-    if abs_max == 0:
-        raw_scale = 1.0
-    elif scale is None:
-        raw_scale = abs_max          # auto: map to [−1, 1]
-    else:
-        raw_scale = float(scale)
-
+    # Use INT16_MAX as default so files written with the shared scale
+    # decode correctly and BH values remain proportionally smaller
+    raw_scale = float(scale) if scale is not None else float(INT16_MAX)
     data /= raw_scale
 
     print(f"Best offset        : {best_offset}")
-    print(f"Std score (int16)  : {best_score:.4f}")
-    print(f"Scale factor       : {raw_scale:.6f}")
+    print(f"Scale factor       : {raw_scale:.2f}")
     print(f"Shape              : {data.shape}")
     print(f"Min / Max          : {data.min():.6f} / {data.max():.6f}")
 
@@ -86,20 +63,16 @@ def write_pj(filename, data, raw_scale=None):
     """
     Write a sinogram to a .pj file.
 
-    The data are stored as int16 with NO header, so the file is always
-    readable by read_pj at offset 0.
+    Stored as int16 with NO header (always readable at offset 0).
+    Uses a fixed scale of INT16_MAX so both ideal and BH sinograms
+    are written with the same quantisation — critical for calibration.
 
     Parameters
     ----------
     filename : str
-        Destination path.
-    data : np.ndarray, shape (nview, ndet), dtype float32 (or any float)
-        Sinogram values.  Values outside [−1, 1] are clipped before
-        conversion.
+    data : np.ndarray, shape (nview, ndet), values in [0, 1]
     raw_scale : float or None
-        Multiply `data` by this value before quantising to int16.
-        If None the function uses INT16_MAX (32 767) so the full dynamic
-        range is exploited.
+        Override scale factor. Default: INT16_MAX (32767).
     """
     if raw_scale is None:
         raw_scale = INT16_MAX
@@ -107,4 +80,5 @@ def write_pj(filename, data, raw_scale=None):
     quantised = np.clip(data * raw_scale, -INT16_MAX, INT16_MAX)
     quantised.astype(np.int16).tofile(filename)
 
-    print(f"Written {filename!r}: shape={data.shape}, scale={raw_scale}")
+    print(f"Written {filename!r}: shape={data.shape}, "
+          f"range=[{data.min():.4f}, {data.max():.4f}], scale={raw_scale}")

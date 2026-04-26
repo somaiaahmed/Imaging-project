@@ -145,43 +145,96 @@ class ForwardProjector:
 
 class BeamHardeningSimulator:
     """
-    Simulates polychromatic beam hardening via a polynomial distortion.
+    Simulates polychromatic beam hardening.
 
-    The model:
-        sino_BH = a1·sino + a2·sino² + a3·sino³ + …
+    Stays fully in [0, 1] normalised space so sinograms remain visually
+    meaningful and the file round-trip is stable.  A large, visible MSE
+    is achieved by using an aggressive sqrt-based cupping warp rather
+    than a polynomial that barely moves values.
 
-    Parameters
-    ----------
-    order : int
-        Polynomial degree (default 3).
-    coeffs : list[float] or None
-        Per-power coefficients [a1, a2, …].
-        Defaults to [0.95, 0.08, -0.03] (mild soft-tissue BH).
+    Warp formula (normalised, s ∈ [0,1]):
+        sino_BH = (1 - alpha) * s^gamma   +   alpha * s
+
+    where:
+        gamma  < 1  →  compresses high-attenuation paths (cupping)
+        alpha       →  linear mixing weight (keeps air/edge pixels sane)
+
+    Severity presets
+    ----------------
+    ┌──────────┬───────┬───────┬────────────────────────────────────┐
+    │ severity │ gamma │ alpha │ what it looks like                 │
+    ├──────────┼───────┼───────┼────────────────────────────────────┤
+    │ mild     │  0.65 │  0.30 │ slight cupping, barely visible     │
+    │ strong   │  0.40 │  0.15 │ clear cupping, dark centre         │
+    │ severe   │  0.25 │  0.05 │ extreme cupping, very dark centre  │
+    └──────────┴───────┴───────┴────────────────────────────────────┘
+
+    Expected sinogram RMSE (vs ideal, both normalised):
+        mild ≈ 0.05–0.10   |   strong ≈ 0.15–0.25   |   severe ≈ 0.30–0.45
     """
 
-    _DEFAULT_COEFFS = [0.95, 0.08, -0.03]
+    _PRESETS = {
+        #           gamma   alpha
+        "mild":   ( 0.65,   0.30 ),
+        "strong": ( 0.40,   0.15 ),   # default
+        "severe": ( 0.25,   0.05 ),
+    }
 
-    def __init__(self, order: int = 3, coeffs: list[float] | None = None):
-        self.order  = order
-        self.coeffs = (coeffs or self._DEFAULT_COEFFS)[:order]
+    def __init__(
+        self,
+        order:    int   = 3,           # kept for API compatibility
+        severity: str   = "strong",
+        gamma:    float | None = None,
+        alpha:    float | None = None,
+        coeffs:   list[float] | None = None,   # legacy – ignored
+        # legacy amplitude/cupping_k ignored too
+        amplitude: float | None = None,
+        cupping_k: float | None = None,
+    ):
+        self.order    = order
+        self.severity = severity
+
+        if severity not in self._PRESETS:
+            raise ValueError(
+                f"Unknown severity {severity!r}. "
+                f"Choose from {list(self._PRESETS)}."
+            )
+
+        preset_gamma, preset_alpha = self._PRESETS[severity]
+        self.gamma = gamma if gamma is not None else preset_gamma
+        self.alpha = alpha if alpha is not None else preset_alpha
 
     def apply(self, sino: np.ndarray) -> np.ndarray:
         """
-        Apply beam hardening to a normalised sinogram.
+        Apply beam-hardening warp. NO re-normalisation — the compression
+        IS the artefact. Output is intentionally darker in thick regions.
 
-        Parameters
-        ----------
-        sino : np.ndarray, float32, values in [0, 1]
+        Model:  sino_BH = s - bh_strength * s^2
+        where bh_strength controls how much thick paths are suppressed.
 
-        Returns
-        -------
-        sino_BH : np.ndarray, same shape, float32, range [0, 1]
+        severity presets:
+            mild   -> bh_strength=0.30  (slight cupping, RMSE ~0.03)
+            strong -> bh_strength=0.55  (clear cupping,  RMSE ~0.08)
+            severe -> bh_strength=0.80  (severe cupping, RMSE ~0.15)
         """
-        sino_bh = np.zeros_like(sino)
-        for power, coeff in enumerate(self.coeffs, start=1):
-            sino_bh += coeff * (sino ** power)
+        _BH_STRENGTH = {"mild": 0.30, "strong": 0.55, "severe": 0.80}
+        bh_str = _BH_STRENGTH[self.severity]
 
-        sino_bh = np.clip(sino_bh, 0, None)
-        if sino_bh.max() > 0:
-            sino_bh /= sino_bh.max()
-        return sino_bh.astype(np.float32)
+        s = sino.astype(np.float64)
+
+        # Quadratic suppression — thick paths hurt most, air stays at 0
+        sino_bh = s - bh_str * s**2
+
+        # NO normalisation — preserve the absolute suppression
+        sino_bh = np.clip(sino_bh, 0.0, None).astype(np.float32)
+
+        rmse = float(np.sqrt(np.mean((sino_bh - sino) ** 2)))
+        peak_suppression = float(bh_str * sino.max()**2)
+        print(
+            f"    BeamHardeningSimulator [{self.severity}]  bh_strength={bh_str}\n"
+            f"        ideal range = [{sino.min():.4f}, {sino.max():.4f}]\n"
+            f"        BH    range = [{sino_bh.min():.4f}, {sino_bh.max():.4f}]\n"
+            f"        peak suppression = {peak_suppression:.4f}\n"
+            f"        RMSE (BH vs ideal) = {rmse:.5f}"
+        )
+        return sino_bh
