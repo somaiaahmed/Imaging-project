@@ -1,9 +1,3 @@
-"""
-ui.py — CT Beam Hardening Pipeline
-Redesigned dark IDE-style interface with stage panels, sinogram viewer,
-metrics sidebar, and live console log.
-"""
-
 from __future__ import annotations
 import sys
 import os
@@ -16,14 +10,12 @@ from PyQt5.QtWidgets import (
     QFrame, QGridLayout, QTabWidget, QSizePolicy, QProgressBar,
     QGroupBox, QToolButton
 )
-from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer, QSize
-from PyQt5.QtGui import QFont, QColor, QPalette, QTextCursor, QFontDatabase
+from PyQt5.QtCore import Qt, QThread, pyqtSignal
+from PyQt5.QtGui import QTextCursor, QFontDatabase
 
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
-import matplotlib.pyplot as plt
 
-# ── Try importing pipeline modules (graceful fallback for standalone preview) ──
 try:
     import pj_io
     from main import (
@@ -39,9 +31,6 @@ except ImportError:
     FILES = {}
 
 
-# ════════════════════════════════════════════════════════════
-# THEME
-# ════════════════════════════════════════════════════════════
 
 DARK = {
     "bg":        "#0d0f1a",
@@ -247,11 +236,6 @@ QProgressBar::chunk {{
     border-radius: 2px;
 }}
 """
-
-
-# ════════════════════════════════════════════════════════════
-# WORKER THREAD
-# ════════════════════════════════════════════════════════════
 
 class PipelineWorker(QThread):
     log_signal   = pyqtSignal(str, str)   # (message, level)

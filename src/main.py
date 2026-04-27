@@ -1,13 +1,7 @@
-"""
-main.py — Clean version
-CT Beam Hardening Pipeline
-"""
-
 from __future__ import annotations
 import argparse
 import os
 import numpy as np
-
 import pj_io
 from phantom import SheppLoganPhantom, ForwardProjector, BeamHardeningSimulator
 from calibration import BHCalibrator, BHCorrector
@@ -15,11 +9,7 @@ from spectrum import XRaySpectrum
 from lut import PhysicsLUT, EmpiricalLUT, BlendedLUT
 from reconstruction import FBPReconstructor, Evaluator
 from plotter import Stage1Plotter, Stage2Plotter, SinogramViewer
-
-
-# ════════════════════════════════════════════════════════════
-# CONFIG
-# ════════════════════════════════════════════════════════════
+from pj_io import INT16_MAX
 
 NVIEW = 360
 NDET = 512
@@ -51,49 +41,45 @@ def ensure_dirs():
         os.makedirs(p, exist_ok=True)
 
 
-# ════════════════════════════════════════════════════════════
-# STAGE 1
-# ════════════════════════════════════════════════════════════
-
 def run_generate():
-    print("\n=== GENERATE ===")
+    """
+    Note --> both files must use the same scale factor so they can be comparable for calibration
+    scale is fixed to INT16_MAX / ideal_max so ideal maps to [0,1]
+    BH is proportionally smaller (reflecting the real suppression)
+    """
     ensure_dirs()
 
-    phantom   = SheppLoganPhantom(size=NDET)
+    phantom = SheppLoganPhantom(size=NDET)
     projector = ForwardProjector(n_views=NVIEW, n_det=NDET)
-    bh_sim    = BeamHardeningSimulator(order=3, severity="strong")  # "severe" for even more
-
+    bh_sim = BeamHardeningSimulator(order=3, severity="strong")
     sino_ideal = projector.project(phantom.image)
-    sino_bh    = bh_sim.apply(sino_ideal)
+    sino_bh = bh_sim.apply(sino_ideal)
 
-    # CRITICAL: both files must use the SAME scale factor so that when
-    # read back their values are directly comparable for calibration.
-    # We fix the scale to INT16_MAX / ideal_max so ideal maps to [0,1]
-    # and BH is proportionally smaller (reflecting the real suppression).
-    from pj_io import INT16_MAX
     shared_scale = INT16_MAX / float(sino_ideal.max())
     pj_io.write_pj(FILES["sino_ideal"], sino_ideal, raw_scale=shared_scale)
     pj_io.write_pj(FILES["sino_bh"],    sino_bh,    raw_scale=shared_scale)
 
-    print("✔ Generated sinograms")
+    print("Successfully generated sinograms")
 
 
+"""
+Stage #1
+teach the program how to undo beam hardening using a curve fit
+calibration --> learn the coefficients and save to use them later on new corrupted sinograms
+Correction --> apply that polynomial to every pixel in the corrupted sinogram
+
+"""
 def run_calibrate():
-    print("\n=== CALIBRATE ===")
-
     sino_bh, _ = pj_io.read_pj(FILES["sino_bh"], NVIEW, NDET)
     sino_ideal, _ = pj_io.read_pj(FILES["sino_ideal"], NVIEW, NDET)
 
     calibrator = BHCalibrator(degree=3, subsample=4)
     calibrator.fit(sino_bh, sino_ideal)
     calibrator.save(FILES["calibration"])
-
-    print("✔ Calibration saved")
+    print("calibration saved")
 
 
 def run_correct(show_plot=True):
-    print("\n=== CORRECT ===")
-
     corrector = BHCorrector(FILES["calibration"])
 
     sino_bh, _ = pj_io.read_pj(FILES["sino_bh"], NVIEW, NDET)
@@ -121,16 +107,21 @@ def run_correct(show_plot=True):
             n_views=NVIEW,
         )
 
-    print("✔ Correction done")
+    print("correction done")
 
 
-# ════════════════════════════════════════════════════════════
-# STAGE 2
-# ════════════════════════════════════════════════════════════
+"""
+Stage #2
+A LUT is just a table that says 
+if input is this value -> output should be that value
+so Instead of using one polynomial formula for all values, LUT uses a stored table and interpolation between points. 
 
+Steps
+1. take a BH value 
+2. look up the corrected value from a table 
+3. use interpolation if the exact value is not listed 
+"""
 def run_build_lut():
-    print("\n=== BUILD LUT ===")
-
     sino_bh, _ = pj_io.read_pj(FILES["sino_bh"], NVIEW, NDET)
     sino_ideal, _ = pj_io.read_pj(FILES["sino_ideal"], NVIEW, NDET)
 
@@ -145,12 +136,10 @@ def run_build_lut():
              empirical_lut=empirical_lut.table,
              blended_lut=blended_lut.table)
 
-    print("✔ LUTs built and saved")
+    print("LUTs built and saved")
 
 
 def run_apply_lut():
-    print("\n=== APPLY LUT ===")
-
     sino_bh, _ = pj_io.read_pj(FILES["sino_bh"], NVIEW, NDET)
     sino_ideal, _ = pj_io.read_pj(FILES["sino_ideal"], NVIEW, NDET)
 
@@ -168,12 +157,10 @@ def run_apply_lut():
              sino_emp=sino_emp,
              sino_comb=sino_comb)
 
-    print("✔ LUT correction applied")
+    print("LUT correction applied")
 
 
 def run_reconstruct():
-    print("\n=== RECONSTRUCT ===")
-
     sino_ideal, _ = pj_io.read_pj(FILES["sino_ideal"], NVIEW, NDET)
     sino_bh, _ = pj_io.read_pj(FILES["sino_bh"], NVIEW, NDET)
     sino_stage1, _ = pj_io.read_pj(FILES["sino_corrected"], NVIEW, NDET)
@@ -201,29 +188,27 @@ def run_reconstruct():
         ),
     )
 
-    print("✔ Reconstruction and evaluation done")
+    print("reconstruction and evaluation done")
 
 
 def run_stage2_plot(show_plot=True):
-    print("\n=== STAGE 2 PLOT ===")
-
     if not show_plot:
         return
 
-    sino_ideal,  _ = pj_io.read_pj(FILES["sino_ideal"],     NVIEW, NDET)
-    sino_bh,     _ = pj_io.read_pj(FILES["sino_bh"],        NVIEW, NDET)
+    sino_ideal,_ = pj_io.read_pj(FILES["sino_ideal"],     NVIEW, NDET)
+    sino_bh, _ = pj_io.read_pj(FILES["sino_bh"],        NVIEW, NDET)
     sino_stage1, _ = pj_io.read_pj(FILES["sino_corrected"], NVIEW, NDET)
     sino_stage2, _ = pj_io.read_pj(FILES["sino_stage2"],    NVIEW, NDET)
 
-    lut_data      = np.load(FILES["lut_npz"], allow_pickle=True)
-    metrics       = np.load(FILES["metrics_npz"])
-    sino_comb     = metrics["sino_comb"]
+    lut_data = np.load(FILES["lut_npz"], allow_pickle=True)
+    metrics = np.load(FILES["metrics_npz"])
+    sino_comb = metrics["sino_comb"]
 
-    physics_lut   = PhysicsLUT.from_table(lut_data["physics_lut"])
+    physics_lut = PhysicsLUT.from_table(lut_data["physics_lut"])
     empirical_lut = EmpiricalLUT.from_table(lut_data["empirical_lut"])
 
     recon = FBPReconstructor()
-    rec   = recon.reconstruct_many(
+    rec = recon.reconstruct_many(
         ideal    = sino_ideal,
         bh       = sino_bh,
         stage1   = sino_stage1,
@@ -262,7 +247,7 @@ def run_stage2_plot(show_plot=True):
         recon_ideal       = rec["ideal"],
     )
 
-    print("✔ Stage 2 plot saved")
+    print("stage 2 plot saved")
 
 
 def run_stage2():
@@ -271,9 +256,6 @@ def run_stage2():
     run_reconstruct()
     run_stage2_plot()
 
-# ════════════════════════════════════════════════════════════
-# UTILS
-# ════════════════════════════════════════════════════════════
 
 def run_show(files):
     sinos = {}
@@ -293,12 +275,8 @@ def run_all():
     run_calibrate()
     run_correct(False)
     run_stage2()
-    print("\n✔ ALL DONE")
+    print("\n ALL DONE")
 
-
-# ════════════════════════════════════════════════════════════
-# CLI
-# ════════════════════════════════════════════════════════════
 
 def main():
     parser = argparse.ArgumentParser()
