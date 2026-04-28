@@ -23,6 +23,7 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
     QWidget,
     QGridLayout,
+    QStackedWidget,
 )
 
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
@@ -40,6 +41,7 @@ try:
         NVIEW,
         NDET,
     )
+    from reconstruction import FBPReconstructor
     PIPELINE_AVAILABLE = True
 except ImportError:
     PIPELINE_AVAILABLE = False
@@ -198,7 +200,7 @@ class PipelineWorker(QThread):
 
 class SinogramCanvas(FigureCanvas):
     def __init__(self, title: str = "", parent=None):
-        self.fig = Figure(figsize=(3.0, 4.2), dpi=96, facecolor=DARK["bg"])
+        self.fig = Figure(figsize=(2.8, 3.2), dpi=96, facecolor=DARK["bg"])
         self.ax = self.fig.add_subplot(111)
         super().__init__(self.fig)
         self.setParent(parent)
@@ -239,6 +241,16 @@ class SinogramCanvas(FigureCanvas):
         self.ax.set_ylabel("View", color=DARK["text3"], fontsize=7)
         self.draw()
 
+    def show_image(self, image: np.ndarray, title: str):
+        self.ax.clear()
+        self._style_ax(title)
+        lo = float(np.percentile(image, 1))
+        hi = float(np.percentile(image, 99))
+        self.ax.imshow(image, cmap="gray", vmin=lo, vmax=hi, origin="upper")
+        self.ax.set_xlabel("X", color=DARK["text3"], fontsize=7)
+        self.ax.set_ylabel("Y", color=DARK["text3"], fontsize=7)
+        self.draw()
+
 
 class MainWindow(QMainWindow):
     LOG_COLORS = {
@@ -252,7 +264,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("CT Beam Hardening Pipeline")
-        self.resize(1450, 900)
+        self.resize(1380, 820)
         self.setStyleSheet(STYLESHEET)
 
         self._worker: PipelineWorker | None = None
@@ -401,9 +413,9 @@ class MainWindow(QMainWindow):
         splitter = QSplitter(Qt.Vertical)
         splitter.setHandleWidth(1)
         splitter.setStyleSheet(f"QSplitter::handle {{ background: {DARK['border']}; }}")
-        splitter.addWidget(self._build_results_board())
+        splitter.addWidget(self._build_main_views())
         splitter.addWidget(self._build_console())
-        splitter.setSizes([760, 130])
+        splitter.setSizes([620, 180])
         lay.addWidget(splitter, 1)
         return w
 
@@ -422,6 +434,17 @@ class MainWindow(QMainWindow):
         lay.addWidget(title)
         lay.addWidget(subtitle)
         lay.addStretch()
+
+        self.results_view_btn = QPushButton("Results")
+        self.results_view_btn.setCheckable(True)
+        self.results_view_btn.setChecked(True)
+        self.results_view_btn.clicked.connect(lambda: self._set_main_view("results"))
+        lay.addWidget(self.results_view_btn)
+
+        self.recon_view_btn = QPushButton("Reconstructions")
+        self.recon_view_btn.setCheckable(True)
+        self.recon_view_btn.clicked.connect(lambda: self._set_main_view("recon"))
+        lay.addWidget(self.recon_view_btn)
 
         clear_btn = QPushButton("Clear Log")
         clear_btn.setFixedHeight(30)
@@ -466,9 +489,87 @@ class MainWindow(QMainWindow):
         self._clear_result_canvases()
         return board
 
+    def _build_recon_panel(self) -> QWidget:
+        panel = QWidget()
+        lay = QVBoxLayout(panel)
+        lay.setContentsMargins(18, 18, 18, 18)
+        lay.setSpacing(14)
+
+        heading = QLabel("Reconstructions")
+        heading.setStyleSheet(f"color: {DARK['text']}; font-size: 16px; font-weight: bold;")
+        lay.addWidget(heading)
+
+        wrap = QWidget()
+        wrap.setStyleSheet(
+            f"background: {DARK['bg2']}; border: 1px solid {DARK['border']}; border-radius: 10px;"
+        )
+        wrap_lay = QVBoxLayout(wrap)
+        wrap_lay.setContentsMargins(0, 0, 0, 0)
+        wrap_lay.setSpacing(0)
+
+        hdr = QLabel("RECONSTRUCTIONS")
+        hdr.setAlignment(Qt.AlignCenter)
+        hdr.setFixedHeight(36)
+        hdr.setStyleSheet(
+            f"background: {DARK['bg3']}; color: {DARK['text']}; font-size: 10px; "
+            f"font-weight: bold; letter-spacing: 2px; border-bottom: 1px solid {DARK['border']};"
+        )
+        wrap_lay.addWidget(hdr)
+
+        sub = QLabel("FBP preview for each available result")
+        sub.setAlignment(Qt.AlignCenter)
+        sub.setWordWrap(True)
+        sub.setFixedHeight(36)
+        sub.setStyleSheet(
+            f"background: {DARK['bg2']}; color: {DARK['text3']}; font-size: 9px; "
+            f"padding: 6px 8px; border-bottom: 1px solid {DARK['border']};"
+        )
+        wrap_lay.addWidget(sub)
+
+        inner = QWidget()
+        grid = QGridLayout(inner)
+        grid.setContentsMargins(10, 10, 10, 10)
+        grid.setHorizontalSpacing(10)
+        grid.setVerticalSpacing(10)
+
+        self.recon_canvases: dict[str, SinogramCanvas] = {}
+        recon_cards = [
+            ("ideal", "Ideal"),
+            ("bh", "Beam Hardening"),
+            ("stage1", "Stage 1"),
+            ("stage2", "Stage 2"),
+            ("stage3", "Stage 3"),
+        ]
+        for idx, (key, title) in enumerate(recon_cards):
+            card, canvas = self._build_result_card(title, "FBP reconstruction", DARK["text2"])
+            self.recon_canvases[key] = canvas
+            grid.addWidget(card, idx // 3, idx % 3)
+        grid.setColumnStretch(0, 1)
+        grid.setColumnStretch(1, 1)
+        grid.setColumnStretch(2, 1)
+
+        wrap_lay.addWidget(inner, 1)
+        lay.addWidget(wrap, 1)
+        self._clear_recon_canvases()
+        return panel
+
+    def _build_main_views(self) -> QWidget:
+        self.main_views = QStackedWidget()
+        self.results_board = self._build_results_board()
+        self.recon_board = self._build_recon_panel()
+        self.main_views.addWidget(self.results_board)
+        self.main_views.addWidget(self.recon_board)
+        return self.main_views
+
+    def _set_main_view(self, view: str):
+        is_results = view == "results"
+        self.results_view_btn.setChecked(is_results)
+        self.recon_view_btn.setChecked(not is_results)
+        self.main_views.setCurrentWidget(self.results_board if is_results else self.recon_board)
+
     def _build_result_card(self, title: str, note: str, color: str):
         cell = QWidget()
-        cell.setMinimumHeight(420)
+        cell.setMinimumHeight(300)
         cell.setStyleSheet(
             f"background: {DARK['bg2']}; border: 1px solid {DARK['border']}; border-radius: 10px;"
         )
@@ -559,9 +660,21 @@ class MainWindow(QMainWindow):
         for key, canvas in self.result_canvases.items():
             canvas.show_placeholder(titles[key])
 
+    def _clear_recon_canvases(self):
+        titles = {
+            "ideal": "Ideal",
+            "bh": "Beam Hardening",
+            "stage1": "Stage 1",
+            "stage2": "Stage 2",
+            "stage3": "Stage 3",
+        }
+        for key, canvas in self.recon_canvases.items():
+            canvas.show_placeholder(titles[key])
+
     def _prepare_display_mode(self, mode: str):
         self._display_mode = mode
         self._clear_result_canvases()
+        self._clear_recon_canvases()
         self._log(f"display mode: {mode}", "info")
 
     def _run_steps(self, steps: list[str]):
@@ -599,6 +712,7 @@ class MainWindow(QMainWindow):
 
     def _on_step_done(self, step: str):
         self._refresh_results(step)
+        self._refresh_reconstructions(step)
 
     def _on_step_error(self, step: str, err: str):
         self._log(f"stopped after {step}: {err}", "error")
@@ -642,6 +756,53 @@ class MainWindow(QMainWindow):
                         self.result_canvases["stage3"].show_sino(metrics["sino_comb"], "Stage 3")
         except Exception as exc:
             self._log(f"result refresh failed: {exc}", "warn")
+
+    def _refresh_reconstructions(self, step: str):
+        if not PIPELINE_AVAILABLE or step not in {"generate", "correct", "apply_lut"}:
+            return
+
+        try:
+            sinograms: dict[str, np.ndarray] = {}
+
+            ideal_path = FILES.get("sino_ideal")
+            bh_path = FILES.get("sino_bh")
+            if ideal_path and os.path.exists(ideal_path):
+                sinograms["ideal"], _ = pj_io.read_pj(ideal_path, NVIEW, NDET)
+            if bh_path and os.path.exists(bh_path):
+                sinograms["bh"], _ = pj_io.read_pj(bh_path, NVIEW, NDET)
+
+            if self._display_mode in {"stage1", "all"}:
+                path = FILES.get("sino_corrected")
+                if path and os.path.exists(path):
+                    sinograms["stage1"], _ = pj_io.read_pj(path, NVIEW, NDET)
+
+            if self._display_mode in {"stage2", "all"}:
+                path = FILES.get("sino_stage2")
+                if path and os.path.exists(path):
+                    sinograms["stage2"], _ = pj_io.read_pj(path, NVIEW, NDET)
+
+            if self._display_mode in {"stage3", "all"}:
+                metrics_path = FILES.get("metrics_npz")
+                if metrics_path and os.path.exists(metrics_path):
+                    metrics = np.load(metrics_path)
+                    sinograms["stage3"] = metrics["sino_comb"]
+
+            if not sinograms:
+                return
+
+            recon = FBPReconstructor().reconstruct_many(**sinograms)
+            for key, image in recon.items():
+                if key in self.recon_canvases:
+                    title = {
+                        "ideal": "Ideal",
+                        "bh": "Beam Hardening",
+                        "stage1": "Stage 1",
+                        "stage2": "Stage 2",
+                        "stage3": "Stage 3",
+                    }[key]
+                    self.recon_canvases[key].show_image(image, title)
+        except Exception as exc:
+            self._log(f"reconstruction refresh failed: {exc}", "warn")
 
 
 def main():
