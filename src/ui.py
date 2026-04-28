@@ -476,7 +476,8 @@ class MainWindow(QMainWindow):
         cl.setContentsMargins(0, 0, 0, 0)
         cl.setSpacing(0)
 
-        hdr = QLabel(f"  {title.upper()}")
+        hdr = QLabel(title.upper())
+        hdr.setAlignment(Qt.AlignCenter)
         hdr.setFixedHeight(34)
         hdr.setStyleSheet(
             f"background: {DARK['bg3']}; color: {color}; font-size: 10px; "
