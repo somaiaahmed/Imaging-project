@@ -113,6 +113,12 @@ QPushButton#PrimaryBtn {{
 QPushButton#PrimaryBtn:hover {{
     background-color: {DARK['accent2']};
 }}
+QPushButton:checked {{
+    background-color: {DARK['accent']};
+    border-color: {DARK['accent2']};
+    color: white;
+    font-weight: bold;
+}}
 QTextEdit#Console {{
     background-color: {DARK['bg']};
     color: {DARK['text2']};
@@ -338,6 +344,7 @@ class MainWindow(QMainWindow):
             "Please Choose a Run Mode"
         )
         intro.setWordWrap(True)
+        intro.setAlignment(Qt.AlignCenter)
         intro.setStyleSheet(
             f"background: {DARK['bg3']}; border: 1px solid {DARK['border']}; "
             f"border-radius: 10px; padding: 12px; color: {DARK['text2']}; font-size: 11px;"
@@ -345,7 +352,6 @@ class MainWindow(QMainWindow):
         inner_lay.addWidget(intro)
 
         self.run_stage1_btn = QPushButton("Run Stage 1")
-        self.run_stage1_btn.setObjectName("PrimaryBtn")
         self.run_stage1_btn.setFixedHeight(40)
         self.run_stage1_btn.clicked.connect(self._run_stage1)
 
@@ -361,12 +367,14 @@ class MainWindow(QMainWindow):
         self.run_all_btn.setFixedHeight(40)
         self.run_all_btn.clicked.connect(self._run_all)
 
-        for btn in [
+        self.stage_buttons = [
             self.run_stage1_btn,
             self.run_stage2_btn,
             self.run_stage3_btn,
             self.run_all_btn,
-        ]:
+        ]
+        for btn in self.stage_buttons:
+            btn.setCheckable(True)
             inner_lay.addWidget(btn)
 
         inner_lay.addStretch()
@@ -438,15 +446,15 @@ class MainWindow(QMainWindow):
 
         self.result_canvases: dict[str, SinogramCanvas] = {}
         cards = [
-            ("ideal", "Ideal", DARK["green"], 0),
-            ("bh", "Beam Hardening", DARK["red"], 1),
-            ("stage1", "Stage 1", DARK["accent"], 2),
-            ("stage2", "Stage 2", DARK["amber"], 3),
-            ("stage3", "Stage 3", DARK["cyan"], 4),
+            ("ideal", "Ideal", "Ground truth sinogram", DARK["green"], 0),
+            ("bh", "Beam Hardening", "Corrupted input projection", DARK["red"], 1),
+            ("stage1", "Stage 1", "Polynomial correction output", DARK["accent"], 2),
+            ("stage2", "Stage 2", "Empirical LUT correction", DARK["amber"], 3),
+            ("stage3", "Stage 3", "Blended LUT correction", DARK["cyan"], 4),
         ]
 
-        for key, title, color, col in cards:
-            card, canvas = self._build_result_card(title, color)
+        for key, title, note, color, col in cards:
+            card, canvas = self._build_result_card(title, note, color)
             self.result_canvases[key] = canvas
             grid.addWidget(card, 0, col)
 
@@ -458,7 +466,7 @@ class MainWindow(QMainWindow):
         self._clear_result_canvases()
         return board
 
-    def _build_result_card(self, title: str, color: str):
+    def _build_result_card(self, title: str, note: str, color: str):
         cell = QWidget()
         cell.setMinimumHeight(420)
         cell.setStyleSheet(
@@ -474,8 +482,17 @@ class MainWindow(QMainWindow):
             f"background: {DARK['bg3']}; color: {color}; font-size: 10px; "
             f"font-weight: bold; letter-spacing: 2px; border-bottom: 1px solid {DARK['border']};"
         )
+        note_lbl = QLabel(note)
+        note_lbl.setAlignment(Qt.AlignCenter)
+        note_lbl.setWordWrap(True)
+        note_lbl.setFixedHeight(36)
+        note_lbl.setStyleSheet(
+            f"background: {DARK['bg2']}; color: {DARK['text3']}; font-size: 9px; "
+            f"padding: 6px 10px; border-bottom: 1px solid {DARK['border']};"
+        )
         canvas = SinogramCanvas(title, parent=cell)
         cl.addWidget(hdr)
+        cl.addWidget(note_lbl)
         cl.addWidget(canvas, 1)
         return cell, canvas
 
@@ -522,14 +539,13 @@ class MainWindow(QMainWindow):
         self._log("log cleared.", "info")
 
     def _set_buttons_enabled(self, enabled: bool):
-        for btn in [
-            self.run_stage1_btn,
-            self.run_stage2_btn,
-            self.run_stage3_btn,
-            self.run_all_btn,
-        ]:
+        for btn in self.stage_buttons:
             btn.setEnabled(enabled)
         self.progress.setVisible(not enabled)
+
+    def _set_active_button(self, active_btn: QPushButton):
+        for btn in self.stage_buttons:
+            btn.setChecked(btn is active_btn)
 
     def _clear_result_canvases(self):
         titles = {
@@ -561,18 +577,22 @@ class MainWindow(QMainWindow):
         self._worker.start()
 
     def _run_stage1(self):
+        self._set_active_button(self.run_stage1_btn)
         self._prepare_display_mode("stage1")
         self._run_steps(["generate", "calibrate", "correct"])
 
     def _run_stage2(self):
+        self._set_active_button(self.run_stage2_btn)
         self._prepare_display_mode("stage2")
         self._run_steps(["generate", "build_lut", "apply_lut"])
 
     def _run_stage3(self):
+        self._set_active_button(self.run_stage3_btn)
         self._prepare_display_mode("stage3")
         self._run_steps(["generate", "build_lut", "apply_lut"])
 
     def _run_all(self):
+        self._set_active_button(self.run_all_btn)
         self._prepare_display_mode("all")
         self._run_steps(["generate", "calibrate", "correct", "build_lut", "apply_lut"])
 
