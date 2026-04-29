@@ -37,6 +37,7 @@ try:
         run_correct,
         run_build_lut,
         run_apply_lut,
+        run_bone_correct,
         FILES,
         NVIEW,
         NDET,
@@ -180,6 +181,8 @@ class PipelineWorker(QThread):
             run_build_lut()
         elif step == "apply_lut":
             run_apply_lut()
+        elif step == "bone_correct":
+            run_bone_correct()
         else:
             raise ValueError(f"Unknown step: {step}")
 
@@ -473,7 +476,7 @@ class MainWindow(QMainWindow):
             ("bh", "Beam Hardening", "Corrupted input projection", DARK["red"], 1),
             ("stage1", "Stage 1", "Polynomial correction output", DARK["accent"], 2),
             ("stage2", "Stage 2", "Empirical LUT correction", DARK["amber"], 3),
-            ("stage3", "Stage 3", "Blended LUT correction", DARK["cyan"], 4),
+            ("stage3", "Stage 3", "Bone Correction", DARK["cyan"], 4),
         ]
 
         for key, title, note, color, col in cards:
@@ -540,10 +543,25 @@ class MainWindow(QMainWindow):
             ("stage2", "Stage 2"),
             ("stage3", "Stage 3"),
         ]
-        for idx, (key, title) in enumerate(recon_cards):
+        # for idx, (key, title) in enumerate(recon_cards):
+        #     card, canvas = self._build_result_card(title, "FBP reconstruction", DARK["text2"])
+        #     self.recon_canvases[key] = canvas
+        #     grid.addWidget(card, idx // 3, idx % 3)
+        positions = {
+            "ideal": (0, 0),
+            "bh": (0, 1),
+
+            "stage1": (1, 0),
+            "stage2": (1, 1),
+            "stage3": (1, 2),
+    }
+
+        for key, title in recon_cards:
             card, canvas = self._build_result_card(title, "FBP reconstruction", DARK["text2"])
             self.recon_canvases[key] = canvas
-            grid.addWidget(card, idx // 3, idx % 3)
+
+            row, col = positions[key]
+            grid.addWidget(card, row, col)    
         grid.setColumnStretch(0, 1)
         grid.setColumnStretch(1, 1)
         grid.setColumnStretch(2, 1)
@@ -703,12 +721,12 @@ class MainWindow(QMainWindow):
     def _run_stage3(self):
         self._set_active_button(self.run_stage3_btn)
         self._prepare_display_mode("stage3")
-        self._run_steps(["generate", "build_lut", "apply_lut"])
+        self._run_steps(["generate", "bone_correct"])
 
     def _run_all(self):
         self._set_active_button(self.run_all_btn)
         self._prepare_display_mode("all")
-        self._run_steps(["generate", "calibrate", "correct", "build_lut", "apply_lut"])
+        self._run_steps(["generate", "calibrate", "correct", "build_lut", "apply_lut", "bone_correct"])
 
     def _on_step_done(self, step: str):
         self._refresh_results(step)
@@ -749,16 +767,18 @@ class MainWindow(QMainWindow):
                         sino, _ = pj_io.read_pj(path, NVIEW, NDET)
                         self.result_canvases["stage2"].show_sino(sino, "Stage 2")
 
-                if self._display_mode in {"stage3", "all"}:
-                    metrics_path = FILES.get("metrics_npz")
-                    if metrics_path and os.path.exists(metrics_path):
-                        metrics = np.load(metrics_path)
-                        self.result_canvases["stage3"].show_sino(metrics["sino_comb"], "Stage 3")
+            elif step == "bone_correct" and self._display_mode in {"stage3", "all"}:
+                    path = FILES.get("sino_bone")
+                
+                    if path and os.path.exists(path):
+                        print("found the path")
+                        sino, _ = pj_io.read_pj(path, NVIEW, NDET)
+                        self.result_canvases["stage3"].show_sino(sino, "Stage 3")
         except Exception as exc:
             self._log(f"result refresh failed: {exc}", "warn")
 
     def _refresh_reconstructions(self, step: str):
-        if not PIPELINE_AVAILABLE or step not in {"generate", "correct", "apply_lut"}:
+        if not PIPELINE_AVAILABLE or step not in {"generate", "correct", "apply_lut","bone_correct"}:
             return
 
         try:
@@ -782,10 +802,9 @@ class MainWindow(QMainWindow):
                     sinograms["stage2"], _ = pj_io.read_pj(path, NVIEW, NDET)
 
             if self._display_mode in {"stage3", "all"}:
-                metrics_path = FILES.get("metrics_npz")
-                if metrics_path and os.path.exists(metrics_path):
-                    metrics = np.load(metrics_path)
-                    sinograms["stage3"] = metrics["sino_comb"]
+                path = FILES.get("sino_bone")
+                if path and os.path.exists(path):
+                    sinograms["stage3"], _ = pj_io.read_pj(path, NVIEW, NDET)
 
             if not sinograms:
                 return

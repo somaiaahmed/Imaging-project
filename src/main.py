@@ -19,6 +19,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PATHS = {
     "raw": os.path.join(BASE_DIR, "data", "raw"),
     "gen": os.path.join(BASE_DIR, "data", "generated"),
+    "figures": os.path.join(BASE_DIR, "data", "Figures"),
 }
 
 FILES = {
@@ -27,12 +28,16 @@ FILES = {
 
     "calibration": os.path.join(PATHS["gen"], "calibration.npz"),
     "sino_corrected": os.path.join(PATHS["gen"], "sino_corrected.pj"),
-    "fig_stage1": os.path.join(PATHS["gen"], "correction_summary.png"),
+    "fig_stage1": os.path.join(PATHS["figures"], "correction_summary.png"),
 
     "sino_stage2": os.path.join(PATHS["gen"], "sino_stage2.pj"),
     "lut_npz": os.path.join(PATHS["gen"], "lut_stage2.npz"),
     "metrics_npz": os.path.join(PATHS["gen"], "stage2_metrics.npz"),
-    "fig_stage2": os.path.join(PATHS["gen"], "stage2_summary.png"),
+    "fig_stage2": os.path.join(PATHS["figures"], "stage2_summary.png"),
+    
+    "sino_bone":    os.path.join(PATHS["gen"], "sino_bone_corrected.pj"),
+    "bone_metrics": os.path.join(PATHS["gen"], "bone_metrics.npz"),
+    "fig_bone":     os.path.join(PATHS["figures"], "bone_correction_summary.png"),
 }
 
 
@@ -256,6 +261,94 @@ def run_stage2():
     run_reconstruct()
     run_stage2_plot()
 
+# ===========  stage3 the bone correction method ===========
+def run_bone_correct(show_plot: bool = True):
+    """
+    Stage 3: iterative bone beam-hardening correction 
+    """
+    print("\n=== Stage 3: Bone Correction ===")
+    ensure_dirs()
+ 
+    sino_bh,    _ = pj_io.read_pj(FILES["sino_bh"],    NVIEW, NDET)
+    sino_ideal, _ = pj_io.read_pj(FILES["sino_ideal"], NVIEW, NDET)
+ 
+    # reconstruct the ideal image for evaluation only
+    from reconstruction import FBPReconstructor
+    ref_image = FBPReconstructor().reconstruct(sino_ideal)
+    image_bh  = FBPReconstructor().reconstruct(sino_bh)
+ 
+    from bone_correction import IterativeBoneCorrector, BoneCorrectionPlotter
+ 
+    corrector = IterativeBoneCorrector(
+        n_views      = NVIEW,
+        n_det        = NDET,
+        severity     = "strong",   # BeamHardeningSimulator severity
+        max_iter     = 14,
+        tol          = 1e-5,
+        lam          = 0.20,
+        hu_threshold = 300.0,
+        erode_px     = 2,
+        verbose      = True,
+    )
+ 
+    result = corrector.correct(
+        sino_raw        = sino_bh,
+        reference_sino  = sino_ideal,
+        reference_image = ref_image,
+    )
+ 
+    corrector.print_summary()
+ 
+    # saving
+    pj_io.write_pj(FILES["sino_bone"], result["sino_corrected"])
+    history = result["history"]
+    np.savez(
+        FILES["bone_metrics"],
+        sino_corrected  = result["sino_corrected"],
+        image_corrected = result["image_corrected"],
+        image_initial   = result["image_initial"],
+        converged       = result["converged"],
+        n_iter          = result["n_iter"],
+        delta_sino      = np.array([
+            h["delta_sino"] if h["delta_sino"] is not None else np.nan
+            for h in history
+        ]),
+        rmse_sino       = np.array([
+            h["rmse_vs_ref_sino"] if h["rmse_vs_ref_sino"] is not None else np.nan
+            for h in history
+        ]),
+        rmse_image      = np.array([
+            h["rmse_vs_ref_image"] if h["rmse_vs_ref_image"] is not None else np.nan
+            for h in history
+        ]),
+    )
+ 
+    print(f"\n  Converged : {result['converged']}")
+    print(f"  Iterations: {result['n_iter']}")
+ 
+    if show_plot:
+        bone_mask = None
+        for h in reversed(history):
+            if h["bone_mask"] is not None:
+                bone_mask = h["bone_mask"]
+                break
+ 
+        plotter = BoneCorrectionPlotter(
+            output_path = FILES["fig_bone"],
+            dpi         = 150,
+        )
+        plotter.plot(
+            sino_bh         = sino_bh,
+            sino_corrected  = result["sino_corrected"],
+            sino_ideal      = sino_ideal,
+            image_bh        = image_bh,
+            image_corrected = result["image_corrected"],
+            image_ideal     = ref_image,
+            bone_mask       = bone_mask,
+            history         = history,
+        )
+ 
+    print("bone correction done")
 
 def run_show(files):
     sinos = {}
@@ -274,7 +367,9 @@ def run_all():
     run_generate()
     run_calibrate()
     run_correct(False)
+    run_bone_correct(False)
     run_stage2()
+    print("\n ALL DONE")
     print("\n ALL DONE")
 
 
@@ -283,7 +378,7 @@ def main():
     parser.add_argument("stage", choices=[
         "generate", "calibrate", "correct",
         "build_lut", "apply_lut", "reconstruct", "stage2_plot",
-        "stage2", "show", "all"
+        "stage2", "show", "all", "bone_correct"
     ])
     parser.add_argument("files", nargs="*")
 
@@ -309,7 +404,10 @@ def main():
         run_show(args.files if args.files else [FILES["sino_bh"]])
     elif args.stage == "all":
         run_all()
+    elif args.stage == "bone_correct":
+        run_bone_correct(True)           
 
 
 if __name__ == "__main__":
     main()
+
