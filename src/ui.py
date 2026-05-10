@@ -398,6 +398,37 @@ class MainWindow(QMainWindow):
             btn.setCheckable(True)
             inner_lay.addWidget(btn)
 
+        metrics_wrap = QWidget()
+        metrics_wrap.setStyleSheet(
+            f"background: {DARK['bg3']}; border: 1px solid {DARK['border']}; border-radius: 10px;"
+        )
+        metrics_lay = QVBoxLayout(metrics_wrap)
+        metrics_lay.setContentsMargins(12, 10, 12, 10)
+        metrics_lay.setSpacing(6)
+
+        metrics_title = QLabel("METRICS")
+        metrics_title.setAlignment(Qt.AlignCenter)
+        metrics_title.setStyleSheet(
+            f"color: {DARK['text3']}; font-size: 10px; font-weight: bold; letter-spacing: 2px;"
+        )
+        metrics_lay.addWidget(metrics_title)
+
+        self.metric_labels: dict[str, QLabel] = {}
+        metric_rows = [
+            ("bh", "BH RMSE"),
+            ("stage1", "Stage 1 RMSE"),
+            ("stage2", "Stage 2 RMSE"),
+            ("stage3", "Stage 3 RMSE"),
+        ]
+        for key, label_text in metric_rows:
+            row = QLabel(f"{label_text}: --")
+            row.setStyleSheet(
+                f"color: {DARK['text2']}; font-size: 11px; padding: 2px 0px;"
+            )
+            metrics_lay.addWidget(row)
+            self.metric_labels[key] = row
+
+        inner_lay.addWidget(metrics_wrap)
         inner_lay.addStretch()
 
         scroll.setWidget(inner)
@@ -567,7 +598,7 @@ class MainWindow(QMainWindow):
             self.recon_canvases[key] = canvas
 
             row, col = positions[key]
-            grid.addWidget(card, row, col)    
+            grid.addWidget(card, row, col)
         grid.setColumnStretch(0, 1)
         grid.setColumnStretch(1, 1)
         grid.setColumnStretch(2, 1)
@@ -695,10 +726,96 @@ class MainWindow(QMainWindow):
         for key, canvas in self.recon_canvases.items():
             canvas.show_placeholder(titles[key])
 
+    def _reset_metrics(self):
+        if not hasattr(self, "metric_labels"):
+            return
+        text_map = {
+            "bh": "BH RMSE",
+            "stage1": "Stage 1 RMSE",
+            "stage2": "Stage 2 RMSE",
+            "stage3": "Stage 3 RMSE",
+        }
+        for key, label in self.metric_labels.items():
+            label.setText(f"{text_map[key]}: --")
+            label.setStyleSheet(
+                f"color: {DARK['text2']}; font-size: 11px; padding: 2px 0px;"
+            )
+
+    def _update_metrics(self):
+        if not PIPELINE_AVAILABLE or not hasattr(self, "metric_labels"):
+            return
+        try:
+            ideal_path = FILES.get("sino_ideal")
+            if not ideal_path or not os.path.exists(ideal_path):
+                return
+
+            ideal, _ = pj_io.read_pj(ideal_path, NVIEW, NDET)
+            title_map = {
+                "bh": "BH RMSE",
+                "stage1": "Stage 1 RMSE",
+                "stage2": "Stage 2 RMSE",
+                "stage3": "Stage 3 RMSE",
+            }
+            stage_candidates = {
+                "stage1": FILES.get("sino_corrected"),
+                "stage2": FILES.get("sino_stage2"),
+                "stage3": FILES.get("sino_bone"),
+            }
+
+            mode_targets = {
+                "stage1": {"stage1"},
+                "stage2": {"stage2"},
+                "stage3": {"stage3"},
+                "all": {"stage1", "stage2", "stage3"},
+            }
+            active_targets = mode_targets.get(self._display_mode, set())
+
+            bh_path = FILES.get("sino_bh")
+            if bh_path and os.path.exists(bh_path):
+                bh, _ = pj_io.read_pj(bh_path, NVIEW, NDET)
+                bh_rmse = float(np.sqrt(np.mean((bh - ideal) ** 2)))
+                self.metric_labels["bh"].setText(f"{title_map['bh']}: {bh_rmse:.5f}")
+                self.metric_labels["bh"].setStyleSheet(
+                    f"color: {DARK['text']}; font-size: 11px; padding: 2px 0px;"
+                )
+            else:
+                self.metric_labels["bh"].setText(f"{title_map['bh']}: --")
+                self.metric_labels["bh"].setStyleSheet(
+                    f"color: {DARK['text2']}; font-size: 11px; padding: 2px 0px;"
+                )
+
+            best_key = None
+            best_val = None
+            for key, path in stage_candidates.items():
+                label = self.metric_labels[key]
+                if key in active_targets and path and os.path.exists(path):
+                    arr, _ = pj_io.read_pj(path, NVIEW, NDET)
+                    rmse = float(np.sqrt(np.mean((arr - ideal) ** 2)))
+                    label.setText(f"{title_map[key]}: {rmse:.5f}")
+                    label.setStyleSheet(
+                        f"color: {DARK['text']}; font-size: 11px; padding: 2px 0px;"
+                    )
+                    if best_val is None or rmse < best_val:
+                        best_val = rmse
+                        best_key = key
+                else:
+                    label.setText(f"{title_map[key]}: --")
+                    label.setStyleSheet(
+                        f"color: {DARK['text2']}; font-size: 11px; padding: 2px 0px;"
+                    )
+
+            if best_key:
+                self.metric_labels[best_key].setStyleSheet(
+                    f"color: {DARK['green']}; font-size: 11px; padding: 2px 0px; font-weight: bold;"
+                )
+        except Exception as exc:
+            self._log(f"metrics update failed: {exc}", "warn")
+
     def _prepare_display_mode(self, mode: str):
         self._display_mode = mode
         self._clear_result_canvases()
         self._clear_recon_canvases()
+        self._reset_metrics()
         self._log(f"display mode: {mode}", "info")
 
     def _run_steps(self, steps: list[str]):
@@ -737,6 +854,7 @@ class MainWindow(QMainWindow):
     def _on_step_done(self, step: str):
         self._refresh_results(step)
         self._refresh_reconstructions(step)
+        self._update_metrics()
 
     def _on_step_error(self, step: str, err: str):
         self._log(f"stopped after {step}: {err}", "error")
@@ -775,7 +893,7 @@ class MainWindow(QMainWindow):
 
             elif step in {"bone_correct", "bone_correct_seq"} and self._display_mode in {"stage3", "all"}:
                     path = FILES.get("sino_bone")
-                
+
                     if path and os.path.exists(path):
                         print("found the path")
                         sino, _ = pj_io.read_pj(path, NVIEW, NDET)
