@@ -126,8 +126,11 @@ Steps
 2. look up the corrected value from a table 
 3. use interpolation if the exact value is not listed 
 """
-def run_build_lut():
-    sino_bh, _ = pj_io.read_pj(FILES["sino_bh"], NVIEW, NDET)
+def run_build_lut(input_file=None):
+    if input_file is None:
+        input_file = FILES["sino_bh"]
+
+    sino_bh, _ = pj_io.read_pj(input_file, NVIEW, NDET)
     sino_ideal, _ = pj_io.read_pj(FILES["sino_ideal"], NVIEW, NDET)
 
     spectrum = XRaySpectrum(kVp=80)
@@ -144,8 +147,11 @@ def run_build_lut():
     print("LUTs built and saved")
 
 
-def run_apply_lut():
-    sino_bh, _ = pj_io.read_pj(FILES["sino_bh"], NVIEW, NDET)
+def run_apply_lut(input_file=None):
+    if input_file is None:
+        input_file = FILES["sino_bh"]
+
+    sino_bh, _ = pj_io.read_pj(input_file, NVIEW, NDET)
     sino_ideal, _ = pj_io.read_pj(FILES["sino_ideal"], NVIEW, NDET)
 
     lut_data = np.load(FILES["lut_npz"], allow_pickle=True)
@@ -255,9 +261,9 @@ def run_stage2_plot(show_plot=True):
     print("stage 2 plot saved")
 
 
-def run_stage2():
-    run_build_lut()
-    run_apply_lut()
+def run_stage2(input_file=None):
+    run_build_lut(input_file)
+    run_apply_lut(input_file)
     run_reconstruct()
     run_stage2_plot()
 
@@ -368,7 +374,7 @@ def run_all():
     run_calibrate()
     run_correct(False)
     run_bone_correct(False)
-    run_stage2()
+    run_stage2(input_file=FILES["sino_corrected"])
     print("\n ALL DONE")
     print("\n ALL DONE")
 
