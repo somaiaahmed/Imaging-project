@@ -185,9 +185,10 @@ class PipelineWorker(QThread):
             run_build_lut(input_file=FILES["sino_corrected"])
         elif step == "apply_lut_stage1":
             run_apply_lut(input_file=FILES["sino_corrected"])
-
         elif step == "bone_correct":
             run_bone_correct()
+        elif step == "bone_correct_seq":
+            run_bone_correct(is_seq=True)
         else:
             raise ValueError(f"Unknown step: {step}")
 
@@ -731,7 +732,7 @@ class MainWindow(QMainWindow):
     def _run_all(self):
         self._set_active_button(self.run_all_btn)
         self._prepare_display_mode("all")
-        self._run_steps(["generate", "calibrate", "correct", "build_lut_stage1", "apply_lut_stage1", "bone_correct"])
+        self._run_steps(["generate", "calibrate", "correct", "build_lut_stage1", "apply_lut_stage1", "bone_correct_seq"])
 
     def _on_step_done(self, step: str):
         self._refresh_results(step)
@@ -772,7 +773,7 @@ class MainWindow(QMainWindow):
                         sino, _ = pj_io.read_pj(path, NVIEW, NDET)
                         self.result_canvases["stage2"].show_sino(sino, "Stage 2")
 
-            elif step == "bone_correct" and self._display_mode in {"stage3", "all"}:
+            elif step in {"bone_correct", "bone_correct_seq"} and self._display_mode in {"stage3", "all"}:
                     path = FILES.get("sino_bone")
                 
                     if path and os.path.exists(path):
@@ -783,7 +784,7 @@ class MainWindow(QMainWindow):
             self._log(f"result refresh failed: {exc}", "warn")
 
     def _refresh_reconstructions(self, step: str):
-        if not PIPELINE_AVAILABLE or step not in {"generate", "correct", "apply_lut", "apply_lut_stage1", "bone_correct"}:
+        if not PIPELINE_AVAILABLE or step not in {"generate", "correct", "apply_lut", "apply_lut_stage1", "bone_correct", "bone_correct_seq"}:
             return
 
         try:

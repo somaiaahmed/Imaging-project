@@ -268,7 +268,7 @@ def run_stage2(input_file=None):
     run_stage2_plot()
 
 # ===========  stage3 the bone correction method ===========
-def run_bone_correct(show_plot: bool = True):
+def run_bone_correct(show_plot: bool = True, is_seq: bool = False):
     """
     Stage 3: iterative bone beam-hardening correction 
     """
@@ -277,9 +277,12 @@ def run_bone_correct(show_plot: bool = True):
  
     sino_bh,    _ = pj_io.read_pj(FILES["sino_bh"],    NVIEW, NDET)
     sino_ideal, _ = pj_io.read_pj(FILES["sino_ideal"], NVIEW, NDET)
+    sino_stage2, _ = pj_io.read_pj(FILES["sino_stage2"], NVIEW, NDET)
  
     # reconstruct the ideal image for evaluation only
     from reconstruction import FBPReconstructor
+    if is_seq:
+        sino_bh = sino_stage2  # for sequential correction, start from stage 2 output
     ref_image = FBPReconstructor().reconstruct(sino_ideal)
     image_bh  = FBPReconstructor().reconstruct(sino_bh)
  
@@ -355,6 +358,8 @@ def run_bone_correct(show_plot: bool = True):
         )
  
     print("bone correction done")
+
+
 
 def run_show(files):
     sinos = {}
